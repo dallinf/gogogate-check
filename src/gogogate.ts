@@ -3,21 +3,53 @@ import {
     getHomeAssistantStates,
     sendPushNotification,
 } from "./homeAssistantApi";
+import { promises as fs } from "fs";
 
 const GARAGE_DOOR_2_CAR = "cover.2_car";
 const GARAGE_DOOR_3_CAR = "cover.3_car";
-const CHECK_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
 const OPEN_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+const STATE_FILE = "garage_state.json";
 
 type DoorState = {
     openSince: number | null;
     lastNotified: number | null;
+    lastState: string | null;
 };
 
 const doorStates: Record<string, DoorState> = {
-    [GARAGE_DOOR_2_CAR]: { openSince: null, lastNotified: null },
-    [GARAGE_DOOR_3_CAR]: { openSince: null, lastNotified: null },
+    [GARAGE_DOOR_2_CAR]: {
+        openSince: null,
+        lastNotified: null,
+        lastState: null,
+    },
+    [GARAGE_DOOR_3_CAR]: {
+        openSince: null,
+        lastNotified: null,
+        lastState: null,
+    },
 };
+
+async function loadState() {
+    try {
+        const data = await fs.readFile(STATE_FILE, "utf-8");
+        const parsed = JSON.parse(data);
+        for (const key of Object.keys(doorStates)) {
+            if (parsed[key]) {
+                doorStates[key] = parsed[key];
+            }
+        }
+    } catch (err) {
+        // File may not exist on first run; that's fine
+    }
+}
+
+async function saveState() {
+    await fs.writeFile(
+        STATE_FILE,
+        JSON.stringify(doorStates, null, 2),
+        "utf-8"
+    );
+}
 
 async function checkGarageDoor(entityId: string) {
     try {
@@ -50,28 +82,27 @@ async function checkGarageDoor(entityId: string) {
                 state.lastNotified = now;
             }
         } else {
+            if (state.lastState === "open") {
+                await sendPushNotification({
+                    message: `The garage door ${entityId} has been closed!`,
+                    title: "Garage Door Alert",
+                });
+            }
             state.openSince = null;
             state.lastNotified = null;
         }
+        state.lastState = garage.state;
     } catch (err) {
         console.error(`Error in checkGarageDoor for ${entityId}:`, err);
     }
 }
 
-console.log("Starting garage door monitors...");
-
-sendPushNotification({
-    message: "Starting garage door monitors...",
-    title: "Garage Door Alert",
-})
-    .then(() => {
-        console.log("Push notification sent successfully");
-    })
-    .catch((err) => {
-        console.error("Error sending push notification:", err);
-    });
-
-for (const entityId of [GARAGE_DOOR_2_CAR, GARAGE_DOOR_3_CAR]) {
-    checkGarageDoor(entityId);
-    setInterval(() => checkGarageDoor(entityId), CHECK_INTERVAL_MS);
+async function main() {
+    await loadState();
+    for (const entityId of [GARAGE_DOOR_2_CAR, GARAGE_DOOR_3_CAR]) {
+        await checkGarageDoor(entityId);
+    }
+    await saveState();
 }
+
+main();
