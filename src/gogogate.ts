@@ -14,6 +14,7 @@ type DoorState = {
     openSince: number | null;
     lastNotified: number | null;
     lastState: string | null;
+    errorCount: number;
 };
 
 const doorStates: Record<string, DoorState> = {
@@ -21,11 +22,13 @@ const doorStates: Record<string, DoorState> = {
         openSince: null,
         lastNotified: null,
         lastState: null,
+        errorCount: 0,
     },
     [GARAGE_DOOR_3_CAR]: {
         openSince: null,
         lastNotified: null,
         lastState: null,
+        errorCount: 0,
     },
 };
 
@@ -57,6 +60,13 @@ async function checkGarageDoor(entityId: string) {
         const garage = states.find((s: any) => s.entity_id === entityId);
         if (!garage) {
             console.error(`Garage door entity ${entityId} not found!`);
+            doorStates[entityId].errorCount++;
+            if (doorStates[entityId].errorCount > 3) {
+                await sendPushNotification({
+                    message: `Garage door entity ${entityId} not found!`,
+                    title: "Garage Door Alert",
+                });
+            }
             return;
         }
         const isOpen = garage.state === "open";
@@ -82,7 +92,12 @@ async function checkGarageDoor(entityId: string) {
                 state.lastNotified = now;
             }
         } else {
-            if (state.lastState === "open") {
+            if (
+                state.lastState === "open" &&
+                state.openSince &&
+                now - state.openSince > OPEN_THRESHOLD_MS
+            ) {
+                console.log(`Garage door ${entityId} has been closed!`);
                 await sendPushNotification({
                     message: `The garage door ${entityId} has been closed!`,
                     title: "Garage Door Alert",
@@ -91,9 +106,18 @@ async function checkGarageDoor(entityId: string) {
             state.openSince = null;
             state.lastNotified = null;
         }
+        state.errorCount = 0;
         state.lastState = garage.state;
     } catch (err) {
         console.error(`Error in checkGarageDoor for ${entityId}:`, err);
+        doorStates[entityId].errorCount++;
+        if (doorStates[entityId].errorCount > 3) {
+            await sendPushNotification({
+                message: `Too many errors for ${entityId}, stopping checks`,
+                title: "Garage Door Alert",
+            });
+            return;
+        }
     }
 }
 
